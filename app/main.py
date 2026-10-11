@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import CORS_ORIGINS
 from .database import Base, engine
+from .migrate import ensure_task_numbers
 from .routers import auth, invites, tasks, workspaces
 
 Base.metadata.create_all(bind=engine)
+ensure_task_numbers(engine)
 
 app = FastAPI(title="Todo Workspace API", version="1.0.0")
 

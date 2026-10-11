@@ -101,8 +101,9 @@ class TaskCreate(BaseModel):
     start_date: date | None = None
     category: str | None = Field(default=None, max_length=120)
     milestone: str | None = Field(default=None, max_length=120)
-    parent_id: int | None = None
-    related_task_ids: list[int] = Field(default_factory=list)
+    # Workspace task numbers (not database ids)
+    parent_number: int | None = None
+    related_task_numbers: list[int] = Field(default_factory=list)
 
 
 class TaskUpdate(BaseModel):
@@ -121,15 +122,16 @@ class TaskUpdate(BaseModel):
     clear_category: bool = False
     milestone: str | None = Field(default=None, max_length=120)
     clear_milestone: bool = False
-    parent_id: int | None = None
+    parent_number: int | None = None
     clear_parent: bool = False
-    related_task_ids: list[int] | None = None
+    related_task_numbers: list[int] | None = None
 
 
 class TaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    number: int
     workspace_id: int
     issue_type: str
     title: str
@@ -142,10 +144,13 @@ class TaskOut(BaseModel):
     category: str | None
     milestone: str | None
     parent_id: int | None
+    parent_number: int | None = None
     created_by_id: int
     created_at: datetime
     updated_at: datetime
     related_task_ids: list[int] = Field(default_factory=list)
+    related_task_numbers: list[int] = Field(default_factory=list)
     child_ids: list[int] = Field(default_factory=list)
+    child_numbers: list[int] = Field(default_factory=list)
     attachments: list[AttachmentOut] = Field(default_factory=list)
     assignee_name: str | None = None

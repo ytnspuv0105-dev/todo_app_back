@@ -4,13 +4,13 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..deps import get_current_user, get_membership
-from ..models import Attachment, Task, TaskRelation, User, WorkspaceMember
+from ..models import Attachment, Task, TaskRelation, User, Workspace, WorkspaceMember
 from ..schemas import AttachmentOut, TaskCreate, TaskOut, TaskUpdate
 
 router = APIRouter(tags=["tasks"])
@@ -30,9 +30,35 @@ def _related_ids(db: Session, task_id: int) -> list[int]:
     return sorted(ids)
 
 
-def _child_ids(db: Session, task_id: int) -> list[int]:
-    rows = db.execute(select(Task.id).where(Task.parent_id == task_id)).scalars().all()
-    return list(rows)
+def _ids_to_numbers(db: Session, task_ids: list[int]) -> list[int]:
+    if not task_ids:
+        return []
+    rows = db.execute(select(Task.id, Task.number).where(Task.id.in_(task_ids))).all()
+    by_id = {r[0]: r[1] for r in rows}
+    return [by_id[i] for i in task_ids if i in by_id]
+
+
+def _child_rows(db: Session, task_id: int) -> list[Task]:
+    return list(
+        db.execute(select(Task).where(Task.parent_id == task_id).order_by(Task.number.asc()))
+        .scalars()
+        .all()
+    )
+
+
+def _task_by_number(db: Session, workspace_id: int, number: int) -> Task | None:
+    return db.execute(
+        select(Task).where(Task.workspace_id == workspace_id, Task.number == number)
+    ).scalar_one_or_none()
+
+
+def _next_task_number(db: Session, workspace_id: int) -> int:
+    # Lock workspace row so concurrent creates get distinct numbers.
+    db.execute(select(Workspace).where(Workspace.id == workspace_id).with_for_update()).scalar_one()
+    max_n = db.execute(
+        select(func.max(Task.number)).where(Task.workspace_id == workspace_id)
+    ).scalar()
+    return int(max_n or 0) + 1
 
 
 def _task_out(db: Session, task: Task) -> TaskOut:
@@ -41,8 +67,16 @@ def _task_out(db: Session, task: Task) -> TaskOut:
         u = db.get(User, task.assignee_id)
         if u:
             assignee_name = u.display_name
+    related_ids = _related_ids(db, task.id)
+    children = _child_rows(db, task.id)
+    parent_number = None
+    if task.parent_id:
+        parent = db.get(Task, task.parent_id)
+        if parent:
+            parent_number = parent.number
     return TaskOut(
         id=task.id,
+        number=task.number,
         workspace_id=task.workspace_id,
         issue_type=task.issue_type,
         title=task.title,
@@ -55,11 +89,14 @@ def _task_out(db: Session, task: Task) -> TaskOut:
         category=task.category,
         milestone=task.milestone,
         parent_id=task.parent_id,
+        parent_number=parent_number,
         created_by_id=task.created_by_id,
         created_at=task.created_at,
         updated_at=task.updated_at,
-        related_task_ids=_related_ids(db, task.id),
-        child_ids=_child_ids(db, task.id),
+        related_task_ids=related_ids,
+        related_task_numbers=_ids_to_numbers(db, related_ids),
+        child_ids=[c.id for c in children],
+        child_numbers=[c.number for c in children],
         attachments=[AttachmentOut.model_validate(a) for a in task.attachments],
         assignee_name=assignee_name,
     )
@@ -79,9 +116,36 @@ def _set_relations(db: Session, task_id: int, related_ids: list[int], workspace_
     for rid in unique:
         other = db.get(Task, rid)
         if other is None or other.workspace_id != workspace_id:
-            raise HTTPException(status_code=400, detail=f"関連課題 {rid} が無効です")
+            raise HTTPException(status_code=400, detail=f"関連課題が無効です")
         a, b = sorted([task_id, rid])
         db.add(TaskRelation(task_id=a, related_task_id=b))
+
+
+def _resolve_parent_id(
+    db: Session, workspace_id: int, parent_number: int | None, self_id: int | None = None
+) -> int | None:
+    if parent_number is None:
+        return None
+    parent = _task_by_number(db, workspace_id, parent_number)
+    if parent is None:
+        raise HTTPException(status_code=400, detail="親課題が無効です")
+    if self_id is not None and parent.id == self_id:
+        raise HTTPException(status_code=400, detail="自分自身を親課題にはできません")
+    return parent.id
+
+
+def _resolve_related_ids(
+    db: Session, workspace_id: int, numbers: list[int], self_id: int | None = None
+) -> list[int]:
+    ids: list[int] = []
+    for n in numbers:
+        t = _task_by_number(db, workspace_id, n)
+        if t is None:
+            raise HTTPException(status_code=400, detail=f"関連課題 #{n} が無効です")
+        if self_id is not None and t.id == self_id:
+            continue
+        ids.append(t.id)
+    return ids
 
 
 @router.get("/workspaces/{workspace_id}/tasks", response_model=list[TaskOut])
@@ -118,10 +182,7 @@ def create_task(
     if not title:
         raise HTTPException(status_code=422, detail="件名は必須です")
 
-    if payload.parent_id is not None:
-        parent = db.get(Task, payload.parent_id)
-        if parent is None or parent.workspace_id != workspace_id:
-            raise HTTPException(status_code=400, detail="親課題が無効です")
+    parent_id = _resolve_parent_id(db, workspace_id, payload.parent_number)
 
     if payload.assignee_id is not None:
         m = db.execute(
@@ -133,8 +194,10 @@ def create_task(
         if m is None:
             raise HTTPException(status_code=400, detail="担当者がワークスペースのメンバーではありません")
 
+    number = _next_task_number(db, workspace_id)
     task = Task(
         workspace_id=workspace_id,
+        number=number,
         issue_type=payload.issue_type,
         title=title,
         description=payload.description or "",
@@ -145,13 +208,16 @@ def create_task(
         start_date=payload.start_date,
         category=payload.category,
         milestone=payload.milestone,
-        parent_id=payload.parent_id,
+        parent_id=parent_id,
         created_by_id=user.id,
     )
     db.add(task)
     db.flush()
-    if payload.related_task_ids:
-        _set_relations(db, task.id, payload.related_task_ids, workspace_id)
+    if payload.related_task_numbers:
+        related_ids = _resolve_related_ids(
+            db, workspace_id, payload.related_task_numbers, self_id=task.id
+        )
+        _set_relations(db, task.id, related_ids, workspace_id)
     db.commit()
     db.refresh(task)
     return _task_out(db, task)
@@ -194,7 +260,6 @@ def update_task(
         "start_date",
         "category",
         "milestone",
-        "parent_id",
     ):
         if key in data and data[key] is not None:
             if key == "title":
@@ -217,6 +282,10 @@ def update_task(
         task.milestone = None
     if payload.clear_parent:
         task.parent_id = None
+    elif "parent_number" in data:
+        task.parent_id = _resolve_parent_id(
+            db, workspace_id, payload.parent_number, self_id=task.id
+        )
 
     if task.parent_id is not None:
         if task.parent_id == task.id:
@@ -235,8 +304,11 @@ def update_task(
         if m is None:
             raise HTTPException(status_code=400, detail="担当者がワークスペースのメンバーではありません")
 
-    if payload.related_task_ids is not None:
-        _set_relations(db, task.id, payload.related_task_ids, workspace_id)
+    if payload.related_task_numbers is not None:
+        related_ids = _resolve_related_ids(
+            db, workspace_id, payload.related_task_numbers, self_id=task.id
+        )
+        _set_relations(db, task.id, related_ids, workspace_id)
 
     task.updated_at = datetime.now(timezone.utc)
     db.commit()

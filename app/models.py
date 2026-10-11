@@ -89,11 +89,16 @@ class WorkspaceInvite(Base):
 
 class Task(Base):
     __tablename__ = "tasks"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "number", name="uq_tasks_workspace_number"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(
         ForeignKey("workspaces.id"), nullable=False, index=True
     )
+    # Per-workspace display number (stable; not renumbered on delete).
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
     issue_type: Mapped[str] = mapped_column(String(40), nullable=False, default="task")
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
