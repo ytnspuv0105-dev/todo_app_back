@@ -12,7 +12,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 from .database import Base
 
@@ -139,6 +141,30 @@ class TaskRelation(Base):
     related_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class TaskChangeHistory(Base):
+    """One row per successful create or update (never collapsed)."""
+
+    __tablename__ = "task_change_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id"), nullable=False, index=True
+    )
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_title: Mapped[str] = mapped_column(String(500), nullable=False)
+    # create | update
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # [{label, before, after}, ...] — empty for create rows
+    changes: Mapped[list] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
 
 

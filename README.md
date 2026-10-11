@@ -64,6 +64,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | POST | `/invites/{token}/join` | 招待で参加 |
 | GET/POST | `/workspaces/{id}/tasks` | 課題一覧 / 作成（ワークスペース内番号を採番） |
 | GET/PATCH/DELETE | `/workspaces/{id}/tasks/{taskId}` | 課題操作（親・関連はワークスペース番号で指定） |
+| GET | `/workspaces/{id}/task-history` | 課題の変更履歴（ダッシュボード用、新しい順） |
 | POST | `/workspaces/{id}/tasks/{taskId}/attachments` | 添付アップロード |
 | GET/DELETE | `/workspaces/{id}/attachments/{id}` | 添付取得 / 削除 |
 

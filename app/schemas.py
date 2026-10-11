@@ -154,3 +154,23 @@ class TaskOut(BaseModel):
     child_numbers: list[int] = Field(default_factory=list)
     attachments: list[AttachmentOut] = Field(default_factory=list)
     assignee_name: str | None = None
+
+
+class TaskChangeItemOut(BaseModel):
+    label: str
+    before: str | None = None
+    after: str | None = None
+
+
+class TaskChangeHistoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    workspace_id: int
+    task_id: int
+    task_number: int
+    task_title: str
+    kind: str
+    changes: list[TaskChangeItemOut] = Field(default_factory=list)
+    created_by_id: int
+    created_at: datetime
