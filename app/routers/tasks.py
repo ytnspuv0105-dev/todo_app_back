@@ -10,8 +10,23 @@ from sqlalchemy.orm import Session
 from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..deps import get_current_user, get_membership
-from ..models import Attachment, Task, TaskRelation, User, Workspace, WorkspaceMember
-from ..schemas import AttachmentOut, TaskCreate, TaskOut, TaskUpdate
+from ..history import diff_snapshots, record_create, record_update, snapshot_task_fields
+from ..models import (
+    Attachment,
+    Task,
+    TaskChangeHistory,
+    TaskRelation,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
+from ..schemas import (
+    AttachmentOut,
+    TaskChangeHistoryOut,
+    TaskCreate,
+    TaskOut,
+    TaskUpdate,
+)
 
 router = APIRouter(tags=["tasks"])
 
@@ -218,6 +233,7 @@ def create_task(
             db, workspace_id, payload.related_task_numbers, self_id=task.id
         )
         _set_relations(db, task.id, related_ids, workspace_id)
+    record_create(db, workspace_id=workspace_id, task=task, user_id=user.id)
     db.commit()
     db.refresh(task)
     return _task_out(db, task)
@@ -242,11 +258,15 @@ def update_task(
     task_id: int,
     payload: TaskUpdate,
     membership: WorkspaceMember = Depends(get_membership),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     task = db.get(Task, task_id)
     if task is None or task.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="課題が見つかりません")
+
+    before_related = _ids_to_numbers(db, _related_ids(db, task.id))
+    before = snapshot_task_fields(db, task, before_related)
 
     data = payload.model_dump(exclude_unset=True)
     for key in (
@@ -310,10 +330,58 @@ def update_task(
         )
         _set_relations(db, task.id, related_ids, workspace_id)
 
+    after_related = _ids_to_numbers(db, _related_ids(db, task.id))
+    after = snapshot_task_fields(db, task, after_related)
+    changes = diff_snapshots(before, after)
+    record_update(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user.id,
+        changes=changes,
+    )
+
     task.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(task)
     return _task_out(db, task)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/task-history",
+    response_model=list[TaskChangeHistoryOut],
+)
+def list_task_history(
+    workspace_id: int,
+    limit: int = 20,
+    membership: WorkspaceMember = Depends(get_membership),
+    db: Session = Depends(get_db),
+):
+    lim = max(1, min(limit, 100))
+    rows = (
+        db.execute(
+            select(TaskChangeHistory)
+            .where(TaskChangeHistory.workspace_id == workspace_id)
+            .order_by(TaskChangeHistory.created_at.desc(), TaskChangeHistory.id.desc())
+            .limit(lim)
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        TaskChangeHistoryOut(
+            id=r.id,
+            workspace_id=r.workspace_id,
+            task_id=r.task_id,
+            task_number=r.task_number,
+            task_title=r.task_title,
+            kind=r.kind,
+            changes=r.changes or [],
+            created_by_id=r.created_by_id,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 @router.delete(
