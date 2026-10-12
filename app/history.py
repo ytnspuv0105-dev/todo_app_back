@@ -104,6 +104,7 @@ def _add_history(
     user_id: int,
     kind: str,
     changes: list[dict[str, str | None]],
+    comment_id: int | None = None,
 ) -> None:
     db.add(
         TaskChangeHistory(
@@ -113,6 +114,7 @@ def _add_history(
             task_title=task.title,
             kind=kind,
             changes=changes,
+            comment_id=comment_id,
             created_by_id=user_id,
         )
     )
@@ -173,6 +175,7 @@ def record_comment(
     body: str,
     before: str | None = None,
     extra_changes: list[dict[str, str | None]] | None = None,
+    comment_id: int | None = None,
 ) -> None:
     """
     History for a new comment, comment edit, or combined comment+field save.
@@ -193,4 +196,5 @@ def record_comment(
         user_id=user_id,
         kind=kind,
         changes=changes,
+        comment_id=comment_id,
     )

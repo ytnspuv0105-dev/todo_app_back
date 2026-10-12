@@ -196,6 +196,8 @@ class TaskChangeHistoryOut(BaseModel):
     task_title: str
     kind: str
     changes: list[TaskChangeItemOut] = Field(default_factory=list)
+    # Present when this history row is tied to a task comment (new, edit, or combined).
+    comment_id: int | None = None
     created_by_id: int
     # Resolved display name; null when the user no longer exists (do not invent).
     created_by_name: str | None = None
