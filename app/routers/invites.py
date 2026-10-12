@@ -38,6 +38,7 @@ def get_invite_info(token: str, db: Session = Depends(get_db)):
         workspace_id=ws.id,
         workspace_name=ws.name,
         role=invite.role,
+        expires_at=invite.expires_at,
     )
 
 
