@@ -136,3 +136,24 @@ def record_update(
             created_by_id=user_id,
         )
     )
+
+
+def record_comment(
+    db: Session,
+    *,
+    workspace_id: int,
+    task: Task,
+    user_id: int,
+) -> None:
+    """One dashboard history row per comment; never merged with field edits."""
+    db.add(
+        TaskChangeHistory(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            task_number=task.number,
+            task_title=task.title,
+            kind="comment",
+            changes=[],
+            created_by_id=user_id,
+        )
+    )

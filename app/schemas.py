@@ -158,6 +158,21 @@ class TaskOut(BaseModel):
     assignee_name: str | None = None
 
 
+class TaskCommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class TaskCommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: int
+    author_id: int
+    author_name: str | None = None
+    body: str
+    created_at: datetime
+
+
 class TaskChangeItemOut(BaseModel):
     label: str
     before: str | None = None

@@ -10,11 +10,18 @@ from sqlalchemy.orm import Session
 from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..deps import get_current_user, get_membership
-from ..history import diff_snapshots, record_create, record_update, snapshot_task_fields
+from ..history import (
+    diff_snapshots,
+    record_comment,
+    record_create,
+    record_update,
+    snapshot_task_fields,
+)
 from ..models import (
     Attachment,
     Task,
     TaskChangeHistory,
+    TaskComment,
     TaskRelation,
     User,
     Workspace,
@@ -23,6 +30,8 @@ from ..models import (
 from ..schemas import (
     AttachmentOut,
     TaskChangeHistoryOut,
+    TaskCommentCreate,
+    TaskCommentOut,
     TaskCreate,
     TaskOut,
     TaskUpdate,
@@ -388,6 +397,72 @@ def list_task_history(
         )
         for r in rows
     ]
+
+
+def _comment_out(db: Session, comment: TaskComment) -> TaskCommentOut:
+    author = db.get(User, comment.author_id)
+    return TaskCommentOut(
+        id=comment.id,
+        task_id=comment.task_id,
+        author_id=comment.author_id,
+        author_name=author.display_name if author else None,
+        body=comment.body,
+        created_at=comment.created_at,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/tasks/{task_id}/comments",
+    response_model=list[TaskCommentOut],
+)
+def list_comments(
+    workspace_id: int,
+    task_id: int,
+    membership: WorkspaceMember = Depends(get_membership),
+    db: Session = Depends(get_db),
+):
+    task = db.get(Task, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
+    rows = (
+        db.execute(
+            select(TaskComment)
+            .where(TaskComment.task_id == task_id)
+            .order_by(TaskComment.created_at.asc(), TaskComment.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    return [_comment_out(db, c) for c in rows]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/tasks/{task_id}/comments",
+    response_model=TaskCommentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_comment(
+    workspace_id: int,
+    task_id: int,
+    payload: TaskCommentCreate,
+    membership: WorkspaceMember = Depends(get_membership),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    task = db.get(Task, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=422, detail="コメントを入力してください")
+
+    comment = TaskComment(task_id=task.id, author_id=user.id, body=body)
+    db.add(comment)
+    db.flush()
+    record_comment(db, workspace_id=workspace_id, task=task, user_id=user.id)
+    db.commit()
+    db.refresh(comment)
+    return _comment_out(db, comment)
 
 
 @router.delete(

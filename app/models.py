@@ -128,6 +128,9 @@ class Task(Base):
     attachments: Mapped[list[Attachment]] = relationship(
         back_populates="task", cascade="all, delete-orphan"
     )
+    comments: Mapped[list[TaskComment]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )
 
 
 class TaskRelation(Base):
@@ -145,7 +148,7 @@ class TaskRelation(Base):
 
 
 class TaskChangeHistory(Base):
-    """One row per successful create or update (never collapsed)."""
+    """One row per successful create, update, or comment (never collapsed)."""
 
     __tablename__ = "task_change_history"
 
@@ -158,14 +161,30 @@ class TaskChangeHistory(Base):
     )
     task_number: Mapped[int] = mapped_column(Integer, nullable=False)
     task_title: Mapped[str] = mapped_column(String(500), nullable=False)
-    # create | update
+    # create | update | comment
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
-    # [{label, before, after}, ...] — empty for create rows
+    # [{label, before, after}, ...] — empty for create/comment rows
     changes: Mapped[list] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
+
+
+class TaskComment(Base):
+    __tablename__ = "task_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
+
+    task: Mapped[Task] = relationship(back_populates="comments")
 
 
 class Attachment(Base):
