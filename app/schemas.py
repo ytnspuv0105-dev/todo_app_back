@@ -26,6 +26,15 @@ class LoginIn(BaseModel):
     password: str
 
 
+class ProfileUpdate(BaseModel):
+    """Profile fields. Password changes only when new_password is sent."""
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    email: EmailStr | None = None
+    current_password: str | None = None
+    new_password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
