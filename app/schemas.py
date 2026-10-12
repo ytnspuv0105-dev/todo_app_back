@@ -127,6 +127,8 @@ class TaskUpdate(BaseModel):
     parent_number: int | None = None
     clear_parent: bool = False
     related_task_numbers: list[int] | None = None
+    # Optional new comment posted with the same save as field edits.
+    comment: str | None = Field(default=None, max_length=5000)
 
 
 class TaskOut(BaseModel):
@@ -158,6 +160,26 @@ class TaskOut(BaseModel):
     assignee_name: str | None = None
 
 
+class TaskCommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class TaskCommentUpdate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class TaskCommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: int
+    author_id: int
+    author_name: str | None = None
+    body: str
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
 class TaskChangeItemOut(BaseModel):
     label: str
     before: str | None = None
@@ -174,6 +196,8 @@ class TaskChangeHistoryOut(BaseModel):
     task_title: str
     kind: str
     changes: list[TaskChangeItemOut] = Field(default_factory=list)
+    # Present when this history row is tied to a task comment (new, edit, or combined).
+    comment_id: int | None = None
     created_by_id: int
     # Resolved display name; null when the user no longer exists (do not invent).
     created_by_name: str | None = None

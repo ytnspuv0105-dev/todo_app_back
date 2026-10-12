@@ -60,3 +60,42 @@ def ensure_task_numbers(engine: Engine) -> None:
     # Enforce NOT NULL after backfill
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE tasks ALTER COLUMN number SET NOT NULL"))
+
+
+def ensure_task_comments_schema(engine: Engine) -> None:
+    """Add task_comments.updated_at when the table predates author edits."""
+    insp = inspect(engine)
+    if "task_comments" not in insp.get_table_names():
+        return
+
+    cols = {c["name"] for c in insp.get_columns("task_comments")}
+    if "updated_at" in cols:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE task_comments "
+                "ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE"
+            )
+        )
+
+
+def ensure_task_history_schema(engine: Engine) -> None:
+    """Add task_change_history.comment_id for detail-timeline comment links."""
+    insp = inspect(engine)
+    if "task_change_history" not in insp.get_table_names():
+        return
+
+    cols = {c["name"] for c in insp.get_columns("task_change_history")}
+    if "comment_id" in cols:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE task_change_history "
+                "ADD COLUMN comment_id INTEGER "
+                "REFERENCES task_comments(id) ON DELETE SET NULL"
+            )
+        )

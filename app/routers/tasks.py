@@ -10,11 +10,18 @@ from sqlalchemy.orm import Session
 from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..deps import get_current_user, get_membership
-from ..history import diff_snapshots, record_create, record_update, snapshot_task_fields
+from ..history import (
+    diff_snapshots,
+    record_comment,
+    record_create,
+    record_update,
+    snapshot_task_fields,
+)
 from ..models import (
     Attachment,
     Task,
     TaskChangeHistory,
+    TaskComment,
     TaskRelation,
     User,
     Workspace,
@@ -23,6 +30,9 @@ from ..models import (
 from ..schemas import (
     AttachmentOut,
     TaskChangeHistoryOut,
+    TaskCommentCreate,
+    TaskCommentOut,
+    TaskCommentUpdate,
     TaskCreate,
     TaskOut,
     TaskUpdate,
@@ -269,6 +279,7 @@ def update_task(
     before = snapshot_task_fields(db, task, before_related)
 
     data = payload.model_dump(exclude_unset=True)
+    comment_text = data.pop("comment", None)
     for key in (
         "issue_type",
         "title",
@@ -333,18 +344,61 @@ def update_task(
     after_related = _ids_to_numbers(db, _related_ids(db, task.id))
     after = snapshot_task_fields(db, task, after_related)
     changes = diff_snapshots(before, after)
-    record_update(
-        db,
-        workspace_id=workspace_id,
-        task=task,
-        user_id=user.id,
-        changes=changes,
-    )
+
+    comment_body = (comment_text or "").strip() if isinstance(comment_text, str) else ""
+    if comment_body:
+        comment = TaskComment(task_id=task.id, author_id=user.id, body=comment_body)
+        db.add(comment)
+        db.flush()
+        record_comment(
+            db,
+            workspace_id=workspace_id,
+            task=task,
+            user_id=user.id,
+            body=comment_body,
+            before=None,
+            extra_changes=changes or None,
+            comment_id=comment.id,
+        )
+    else:
+        record_update(
+            db,
+            workspace_id=workspace_id,
+            task=task,
+            user_id=user.id,
+            changes=changes,
+        )
 
     task.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(task)
     return _task_out(db, task)
+
+
+def _history_out(
+    rows: list[TaskChangeHistory], db: Session
+) -> list[TaskChangeHistoryOut]:
+    actor_ids = {r.created_by_id for r in rows}
+    actors = {
+        u.id: u.display_name
+        for u in db.execute(select(User).where(User.id.in_(actor_ids))).scalars().all()
+    } if actor_ids else {}
+    return [
+        TaskChangeHistoryOut(
+            id=r.id,
+            workspace_id=r.workspace_id,
+            task_id=r.task_id,
+            task_number=r.task_number,
+            task_title=r.task_title,
+            kind=r.kind,
+            changes=r.changes or [],
+            comment_id=r.comment_id,
+            created_by_id=r.created_by_id,
+            created_by_name=actors.get(r.created_by_id),
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 @router.get(
@@ -368,26 +422,159 @@ def list_task_history(
         .scalars()
         .all()
     )
-    actor_ids = {r.created_by_id for r in rows}
-    actors = {
-        u.id: u.display_name
-        for u in db.execute(select(User).where(User.id.in_(actor_ids))).scalars().all()
-    } if actor_ids else {}
-    return [
-        TaskChangeHistoryOut(
-            id=r.id,
-            workspace_id=r.workspace_id,
-            task_id=r.task_id,
-            task_number=r.task_number,
-            task_title=r.task_title,
-            kind=r.kind,
-            changes=r.changes or [],
-            created_by_id=r.created_by_id,
-            created_by_name=actors.get(r.created_by_id),
-            created_at=r.created_at,
+    return _history_out(rows, db)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/tasks/{task_id}/history",
+    response_model=list[TaskChangeHistoryOut],
+)
+def list_task_change_history(
+    workspace_id: int,
+    task_id: int,
+    limit: int = 100,
+    membership: WorkspaceMember = Depends(get_membership),
+    db: Session = Depends(get_db),
+):
+    """Chronological change timeline for one task (oldest first)."""
+    task = db.get(Task, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
+    lim = max(1, min(limit, 200))
+    rows = (
+        db.execute(
+            select(TaskChangeHistory)
+            .where(
+                TaskChangeHistory.workspace_id == workspace_id,
+                TaskChangeHistory.task_id == task_id,
+            )
+            .order_by(TaskChangeHistory.created_at.asc(), TaskChangeHistory.id.asc())
+            .limit(lim)
         )
-        for r in rows
-    ]
+        .scalars()
+        .all()
+    )
+    return _history_out(rows, db)
+
+
+def _comment_out(db: Session, comment: TaskComment) -> TaskCommentOut:
+    author = db.get(User, comment.author_id)
+    return TaskCommentOut(
+        id=comment.id,
+        task_id=comment.task_id,
+        author_id=comment.author_id,
+        author_name=author.display_name if author else None,
+        body=comment.body,
+        created_at=comment.created_at,
+        updated_at=comment.updated_at,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/tasks/{task_id}/comments",
+    response_model=list[TaskCommentOut],
+)
+def list_comments(
+    workspace_id: int,
+    task_id: int,
+    membership: WorkspaceMember = Depends(get_membership),
+    db: Session = Depends(get_db),
+):
+    task = db.get(Task, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
+    rows = (
+        db.execute(
+            select(TaskComment)
+            .where(TaskComment.task_id == task_id)
+            .order_by(TaskComment.created_at.asc(), TaskComment.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    return [_comment_out(db, c) for c in rows]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/tasks/{task_id}/comments",
+    response_model=TaskCommentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_comment(
+    workspace_id: int,
+    task_id: int,
+    payload: TaskCommentCreate,
+    membership: WorkspaceMember = Depends(get_membership),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    task = db.get(Task, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=422, detail="コメントを入力してください")
+
+    comment = TaskComment(task_id=task.id, author_id=user.id, body=body)
+    db.add(comment)
+    db.flush()
+    record_comment(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user.id,
+        body=body,
+        before=None,
+        comment_id=comment.id,
+    )
+    db.commit()
+    db.refresh(comment)
+    return _comment_out(db, comment)
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/tasks/{task_id}/comments/{comment_id}",
+    response_model=TaskCommentOut,
+)
+def update_comment(
+    workspace_id: int,
+    task_id: int,
+    comment_id: int,
+    payload: TaskCommentUpdate,
+    membership: WorkspaceMember = Depends(get_membership),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    task = db.get(Task, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
+    comment = db.get(TaskComment, comment_id)
+    if comment is None or comment.task_id != task_id:
+        raise HTTPException(status_code=404, detail="コメントが見つかりません")
+    if comment.author_id != user.id:
+        raise HTTPException(status_code=403, detail="自分のコメントのみ編集できます")
+
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=422, detail="コメントを入力してください")
+    if body == comment.body:
+        return _comment_out(db, comment)
+
+    before = comment.body
+    comment.body = body
+    comment.updated_at = datetime.now(timezone.utc)
+    record_comment(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user.id,
+        body=body,
+        before=before,
+        comment_id=comment.id,
+    )
+    db.commit()
+    db.refresh(comment)
+    return _comment_out(db, comment)
 
 
 @router.delete(
