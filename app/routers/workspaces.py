@@ -132,5 +132,6 @@ def create_invite(
         token=invite.token,
         role=invite.role,
         created_at=invite.created_at,
+        expires_at=invite.expires_at,
         invite_path=f"/invite/{invite.token}",
     )

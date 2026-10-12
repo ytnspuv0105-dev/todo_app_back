@@ -69,6 +69,7 @@ class InviteOut(BaseModel):
     token: str
     role: str
     created_at: datetime
+    expires_at: datetime | None = None
     invite_path: str
 
 
@@ -76,6 +77,7 @@ class InviteInfoOut(BaseModel):
     workspace_id: int
     workspace_name: str
     role: str
+    expires_at: datetime | None = None
 
 
 class AttachmentOut(BaseModel):
@@ -173,4 +175,6 @@ class TaskChangeHistoryOut(BaseModel):
     kind: str
     changes: list[TaskChangeItemOut] = Field(default_factory=list)
     created_by_id: int
+    # Resolved display name; null when the user no longer exists (do not invent).
+    created_by_name: str | None = None
     created_at: datetime

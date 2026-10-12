@@ -368,6 +368,11 @@ def list_task_history(
         .scalars()
         .all()
     )
+    actor_ids = {r.created_by_id for r in rows}
+    actors = {
+        u.id: u.display_name
+        for u in db.execute(select(User).where(User.id.in_(actor_ids))).scalars().all()
+    } if actor_ids else {}
     return [
         TaskChangeHistoryOut(
             id=r.id,
@@ -378,6 +383,7 @@ def list_task_history(
             kind=r.kind,
             changes=r.changes or [],
             created_by_id=r.created_by_id,
+            created_by_name=actors.get(r.created_by_id),
             created_at=r.created_at,
         )
         for r in rows
