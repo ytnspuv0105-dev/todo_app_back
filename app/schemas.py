@@ -127,6 +127,8 @@ class TaskUpdate(BaseModel):
     parent_number: int | None = None
     clear_parent: bool = False
     related_task_numbers: list[int] | None = None
+    # Optional new comment posted with the same save as field edits.
+    comment: str | None = Field(default=None, max_length=5000)
 
 
 class TaskOut(BaseModel):
@@ -162,6 +164,10 @@ class TaskCommentCreate(BaseModel):
     body: str = Field(min_length=1, max_length=5000)
 
 
+class TaskCommentUpdate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+
+
 class TaskCommentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -171,6 +177,7 @@ class TaskCommentOut(BaseModel):
     author_name: str | None = None
     body: str
     created_at: datetime
+    updated_at: datetime | None = None
 
 
 class TaskChangeItemOut(BaseModel):

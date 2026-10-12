@@ -28,6 +28,7 @@ PRIORITY_LABELS = {
 }
 
 EMPTY = "（空）"
+COMMENT_LABEL = "コメント"
 
 
 def _display(value: Any) -> str:
@@ -95,12 +96,14 @@ def diff_snapshots(
     return changes
 
 
-def record_create(
+def _add_history(
     db: Session,
     *,
     workspace_id: int,
     task: Task,
     user_id: int,
+    kind: str,
+    changes: list[dict[str, str | None]],
 ) -> None:
     db.add(
         TaskChangeHistory(
@@ -108,10 +111,27 @@ def record_create(
             task_id=task.id,
             task_number=task.number,
             task_title=task.title,
-            kind="create",
-            changes=[],
+            kind=kind,
+            changes=changes,
             created_by_id=user_id,
         )
+    )
+
+
+def record_create(
+    db: Session,
+    *,
+    workspace_id: int,
+    task: Task,
+    user_id: int,
+) -> None:
+    _add_history(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user_id,
+        kind="create",
+        changes=[],
     )
 
 
@@ -125,17 +145,23 @@ def record_update(
 ) -> None:
     if not changes:
         return
-    db.add(
-        TaskChangeHistory(
-            workspace_id=workspace_id,
-            task_id=task.id,
-            task_number=task.number,
-            task_title=task.title,
-            kind="update",
-            changes=changes,
-            created_by_id=user_id,
-        )
+    _add_history(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user_id,
+        kind="update",
+        changes=changes,
     )
+
+
+def comment_change(
+    *,
+    before: str | None,
+    after: str,
+) -> dict[str, str | None]:
+    """New comment uses before=None; edits set both sides."""
+    return {"label": COMMENT_LABEL, "before": before, "after": after}
 
 
 def record_comment(
@@ -144,16 +170,27 @@ def record_comment(
     workspace_id: int,
     task: Task,
     user_id: int,
+    body: str,
+    before: str | None = None,
+    extra_changes: list[dict[str, str | None]] | None = None,
 ) -> None:
-    """One dashboard history row per comment; never merged with field edits."""
-    db.add(
-        TaskChangeHistory(
-            workspace_id=workspace_id,
-            task_id=task.id,
-            task_number=task.number,
-            task_title=task.title,
-            kind="comment",
-            changes=[],
-            created_by_id=user_id,
-        )
+    """
+    History for a new comment, comment edit, or combined comment+field save.
+
+    - New comment only: kind=comment, changes=[コメント after=body]
+    - Comment edit: kind=comment, changes=[コメント before→after]
+    - Combined with field diffs: kind=update, comment change first then field diffs
+    """
+    changes: list[dict[str, str | None]] = [
+        comment_change(before=before, after=body),
+        *(extra_changes or []),
+    ]
+    kind = "update" if extra_changes else "comment"
+    _add_history(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user_id,
+        kind=kind,
+        changes=changes,
     )
