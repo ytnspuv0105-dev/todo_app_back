@@ -29,6 +29,8 @@ PRIORITY_LABELS = {
 
 EMPTY = "（空）"
 COMMENT_LABEL = "コメント"
+ATTACHMENT_LABEL = "添付"
+ATTACHMENT_NONE = "（なし）"
 
 
 def _display(value: Any) -> str:
@@ -135,6 +137,17 @@ def record_create(
         kind="create",
         changes=[],
     )
+
+
+def attachment_change(
+    *, before_name: str | None, after_name: str | None
+) -> dict[str, str | None]:
+    """One attachment add or delete, same shape as other field diffs."""
+    return {
+        "label": ATTACHMENT_LABEL,
+        "before": before_name if before_name else ATTACHMENT_NONE,
+        "after": after_name if after_name else ATTACHMENT_NONE,
+    }
 
 
 def record_update(

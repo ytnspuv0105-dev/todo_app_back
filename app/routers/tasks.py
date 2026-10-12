@@ -11,6 +11,7 @@ from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..deps import get_current_user, get_membership
 from ..history import (
+    attachment_change,
     diff_snapshots,
     record_comment,
     record_create,
@@ -651,6 +652,13 @@ async def upload_attachment(
     )
     db.add(att)
     task.updated_at = datetime.now(timezone.utc)
+    record_update(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user.id,
+        changes=[attachment_change(before_name=None, after_name=att.filename)],
+    )
     db.commit()
     db.refresh(att)
     return AttachmentOut.model_validate(att)
@@ -683,6 +691,7 @@ def delete_attachment(
     workspace_id: int,
     attachment_id: int,
     membership: WorkspaceMember = Depends(get_membership),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     att = db.get(Attachment, attachment_id)
@@ -691,9 +700,17 @@ def delete_attachment(
     task = db.get(Task, att.task_id)
     if task is None or task.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="添付ファイルが見つかりません")
+    filename = att.filename
     path = UPLOAD_DIR / att.stored_name
     if path.exists():
         path.unlink()
+    record_update(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user.id,
+        changes=[attachment_change(before_name=filename, after_name=None)],
+    )
     db.delete(att)
     db.commit()
     return None
