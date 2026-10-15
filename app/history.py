@@ -122,20 +122,38 @@ def _add_history(
     )
 
 
+def present_create_values(snapshot: dict[str, str]) -> list[dict[str, str | None]]:
+    """Fields that have a value at creation. Empty fields are omitted.
+
+    `before` stays null so the UI can show `項目: 値` without a before → after arrow.
+    Rows stored before this (changes=[]) stay label-only; do not backfill them.
+    """
+    values: list[dict[str, str | None]] = []
+    for label, value in snapshot.items():
+        if value is None or value == "" or value == EMPTY:
+            continue
+        values.append({"label": label, "before": None, "after": value})
+    return values
+
+
 def record_create(
     db: Session,
     *,
     workspace_id: int,
     task: Task,
     user_id: int,
+    related_numbers: list[int] | None = None,
 ) -> None:
+    values = present_create_values(
+        snapshot_task_fields(db, task, related_numbers or [])
+    )
     _add_history(
         db,
         workspace_id=workspace_id,
         task=task,
         user_id=user_id,
         kind="create",
-        changes=[],
+        changes=values,
     )
 
 

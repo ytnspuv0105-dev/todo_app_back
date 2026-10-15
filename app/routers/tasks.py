@@ -244,7 +244,14 @@ def create_task(
             db, workspace_id, payload.related_task_numbers, self_id=task.id
         )
         _set_relations(db, task.id, related_ids, workspace_id)
-    record_create(db, workspace_id=workspace_id, task=task, user_id=user.id)
+    related_numbers = _ids_to_numbers(db, _related_ids(db, task.id))
+    record_create(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        user_id=user.id,
+        related_numbers=related_numbers,
+    )
     db.commit()
     db.refresh(task)
     return _task_out(db, task)
