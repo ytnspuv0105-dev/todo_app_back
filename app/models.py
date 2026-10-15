@@ -163,7 +163,8 @@ class TaskChangeHistory(Base):
     task_title: Mapped[str] = mapped_column(String(500), nullable=False)
     # create | update | comment
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
-    # [{label, before, after}, ...] — empty for create/comment rows
+    # [{label, before, after}, ...]
+    # create: filled fields only, before is null. Older creates may be [].
     changes: Mapped[list] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
     # Set for new-comment / comment-edit / combined-save rows when a TaskComment exists.
     comment_id: Mapped[int | None] = mapped_column(
