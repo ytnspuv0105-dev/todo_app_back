@@ -160,6 +160,88 @@ def _resolve_parent_id(
     return parent.id
 
 
+def _ancestor_ids(db: Session, parent_id: int | None) -> set[int]:
+    """Ids walking up from parent_id, including parent_id. Stops on a cycle."""
+    ancestors: set[int] = set()
+    current = parent_id
+    while current is not None and current not in ancestors:
+        node = db.get(Task, current)
+        if node is None:
+            break
+        ancestors.add(node.id)
+        current = node.parent_id
+    return ancestors
+
+
+def _assert_no_parent_cycle(
+    db: Session, task_id: int, parent_id: int | None, workspace_id: int
+) -> None:
+    """A task cannot be its own ancestor."""
+    if parent_id is None:
+        return
+    if parent_id == task_id:
+        raise HTTPException(status_code=400, detail="自分自身を親課題にはできません")
+    seen: set[int] = set()
+    current: int | None = parent_id
+    while current is not None:
+        if current == task_id or current in seen:
+            raise HTTPException(status_code=400, detail="循環する親子関係は設定できません")
+        seen.add(current)
+        parent = db.get(Task, current)
+        if parent is None or parent.workspace_id != workspace_id:
+            raise HTTPException(status_code=400, detail="親課題が無効です")
+        current = parent.parent_id
+
+
+def _assign_child_parents(
+    db: Session,
+    *,
+    workspace_id: int,
+    task: Task,
+    child_numbers: list[int],
+    user_id: int,
+) -> None:
+    """Point each chosen task at this task. Rejects ancestor cycles."""
+    unique_numbers: list[int] = []
+    seen_numbers: set[int] = set()
+    for number in child_numbers:
+        if number in seen_numbers:
+            continue
+        seen_numbers.add(number)
+        unique_numbers.append(number)
+    if not unique_numbers:
+        return
+
+    blocked = _ancestor_ids(db, task.parent_id)
+    blocked.add(task.id)
+
+    chosen: list[Task] = []
+    for number in unique_numbers:
+        child = _task_by_number(db, workspace_id, number)
+        if child is None:
+            raise HTTPException(status_code=400, detail=f"子課題 #{number} が無効です")
+        if child.id in blocked:
+            raise HTTPException(status_code=400, detail="循環する親子関係は設定できません")
+        chosen.append(child)
+
+    for child in chosen:
+        if child.parent_id == task.id:
+            continue
+        before_related = _ids_to_numbers(db, _related_ids(db, child.id))
+        before = snapshot_task_fields(db, child, before_related)
+        child.parent_id = task.id
+        child.updated_at = datetime.now(timezone.utc)
+        after = snapshot_task_fields(db, child, before_related)
+        record_update(
+            db,
+            workspace_id=workspace_id,
+            task=child,
+            user_id=user_id,
+            changes=diff_snapshots(before, after),
+        )
+    db.flush()
+
+
 def _resolve_related_ids(
     db: Session, workspace_id: int, numbers: list[int], self_id: int | None = None
 ) -> list[int]:
@@ -244,6 +326,13 @@ def create_task(
             db, workspace_id, payload.related_task_numbers, self_id=task.id
         )
         _set_relations(db, task.id, related_ids, workspace_id)
+    _assign_child_parents(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        child_numbers=payload.child_numbers,
+        user_id=user.id,
+    )
     related_numbers = _ids_to_numbers(db, _related_ids(db, task.id))
     record_create(
         db,
@@ -319,6 +408,7 @@ def update_task(
         task.category = None
     if payload.clear_milestone:
         task.milestone = None
+    parent_touched = payload.clear_parent or "parent_number" in data
     if payload.clear_parent:
         task.parent_id = None
     elif "parent_number" in data:
@@ -326,12 +416,8 @@ def update_task(
             db, workspace_id, payload.parent_number, self_id=task.id
         )
 
-    if task.parent_id is not None:
-        if task.parent_id == task.id:
-            raise HTTPException(status_code=400, detail="自分自身を親課題にはできません")
-        parent = db.get(Task, task.parent_id)
-        if parent is None or parent.workspace_id != workspace_id:
-            raise HTTPException(status_code=400, detail="親課題が無効です")
+    if parent_touched:
+        _assert_no_parent_cycle(db, task.id, task.parent_id, workspace_id)
 
     if task.assignee_id is not None:
         m = db.execute(

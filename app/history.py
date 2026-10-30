@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Task, TaskChangeHistory, User
@@ -63,6 +64,21 @@ def _parent_label(db: Session, parent_id: int | None) -> str:
     return f"#{parent.number}"
 
 
+def _children_label(db: Session, task_id: int) -> str:
+    numbers = (
+        db.execute(
+            select(Task.number)
+            .where(Task.parent_id == task_id)
+            .order_by(Task.number.asc())
+        )
+        .scalars()
+        .all()
+    )
+    if not numbers:
+        return EMPTY
+    return ", ".join(f"#{n}" for n in numbers)
+
+
 def snapshot_task_fields(
     db: Session, task: Task, related_numbers: list[int]
 ) -> dict[str, str]:
@@ -78,6 +94,7 @@ def snapshot_task_fields(
         "カテゴリー": _display(task.category),
         "マイルストーン": _display(task.milestone),
         "親課題": _parent_label(db, task.parent_id),
+        "子課題": _children_label(db, task.id),
         "関連課題": _display(related_numbers),
     }
 

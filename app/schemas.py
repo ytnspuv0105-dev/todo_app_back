@@ -114,6 +114,8 @@ class TaskCreate(BaseModel):
     milestone: str | None = Field(default=None, max_length=120)
     # Workspace task numbers (not database ids)
     parent_number: int | None = None
+    # Existing tasks whose parent becomes this new task. Workspace numbers.
+    child_numbers: list[int] = Field(default_factory=list)
     related_task_numbers: list[int] = Field(default_factory=list)
 
 
